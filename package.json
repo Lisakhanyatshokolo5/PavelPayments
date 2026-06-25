@@ -1,0 +1,20 @@
+{
+  "name": "pavel-payments",
+  "version": "0.1.0",
+  "description": "Usage-based payment infrastructure using Interledger Open Payments",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=apps/core-backend\" \"npm run dev --workspace=apps/web-client\"",
+    "dev:backend": "npm run dev --workspace=apps/core-backend",
+    "dev:web": "npm run dev --workspace=apps/web-client",
+    "dev:edge": "npm run dev --workspace=apps/edge-terminal",
+    "install:all": "npm install --workspaces",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
