@@ -2,7 +2,8 @@
  * config/keys.js
  *
  * Loads the Ed25519 private key from disk and exposes:
- *  - privateKeyBuffer  — raw Buffer of the PEM/raw key (consumed by the SDK)
+ *  - privateKeyPath    — absolute path to PEM key file (preferred by SDK)
+ *  - privateKeyBuffer  — PEM key contents (used by legacy code paths)
  *  - publicJwks        — the JSON Web Key Set served at GET /jwks.json
  *
  * Key generation (run once, keep keys/ out of git):
@@ -22,19 +23,22 @@ const path = require("path");
 
 const KEY_DIR = path.resolve(__dirname, "../../../../keys");
 
+let privateKeyPath;
 let privateKeyBuffer;
 let publicJwks;
 
 try {
-  privateKeyBuffer = fs.readFileSync(path.join(KEY_DIR, "private.key"));
+  privateKeyPath = path.join(KEY_DIR, "private.key");
+  privateKeyBuffer = fs.readFileSync(privateKeyPath);
   publicJwks = JSON.parse(fs.readFileSync(path.join(KEY_DIR, "public.json"), "utf8"));
 } catch {
   console.warn(
     "[keys] Key files not found in ./keys/. " +
     "Run the key-generation command in config/keys.js to create them before starting the server."
   );
+  privateKeyPath = null;
   privateKeyBuffer = null;
   publicJwks = { keys: [] };
 }
 
-module.exports = { privateKeyBuffer, publicJwks };
+module.exports = { privateKeyPath, privateKeyBuffer, publicJwks };

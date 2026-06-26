@@ -24,11 +24,18 @@ export function useWallet() {
   });
 
   const connect = useCallback(async (walletAddress: string) => {
-    setState((s) => ({ ...s, isConnecting: true, error: null }));
+    setState((s) => ({
+      ...s,
+      isConnecting: true,
+      error: null,
+      isConnected: false,
+      interactRedirectUrl: null,
+    }));
     try {
       const { data } = await axios.post<{ interactRedirectUrl: string }>(
         `${BACKEND_URL}/api/grants/initiate`,
-        { walletAddress }
+        { walletAddress },
+        { withCredentials: true }
       );
       setState((s) => ({
         ...s,
@@ -39,7 +46,7 @@ export function useWallet() {
       }));
     } catch (err: unknown) {
       const message = axios.isAxiosError(err)
-        ? (err.response?.data?.message ?? err.message)
+        ? (err.response?.data?.error ?? err.response?.data?.message ?? err.message)
         : "Unknown error";
       setState((s) => ({ ...s, isConnecting: false, error: message }));
     }

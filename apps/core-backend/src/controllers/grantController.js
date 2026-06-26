@@ -21,11 +21,8 @@ async function initiateGrant(req, res) {
   }
 
   try {
-    const { interactRedirectUrl, continueToken } = await gnapAuthService.initiateGrant(walletAddress);
-
-    // Store continueToken in session/DB (here simplified as a response cookie)
-    res.cookie("gnap_continue_token", continueToken, { httpOnly: true, sameSite: "lax" });
-
+    const { interactRedirectUrl } = await gnapAuthService.initiateGrant(walletAddress);
+    // stateId is embedded in the finish URI — no cookies needed.
     return res.json({ interactRedirectUrl });
   } catch (err) {
     console.error("[grantController] initiateGrant error:", err);
@@ -35,42 +32,35 @@ async function initiateGrant(req, res) {
 
 /**
  * Handle the wallet redirect after the user approves/denies the mandate.
- * Exchanges the interact_ref for a usable access token, then activates
- * any pending subscription that was created alongside the grant.
+ * The stateId in ?state= lets us look up the continue token from a server-side store,
+ * avoiding the cross-site cookie problem entirely.
  */
 async function handleCallback(req, res) {
-  const { interact_ref, hash } = req.query;
-  const continueToken = req.cookies?.gnap_continue_token;
-  const pendingSubscriptionId = req.cookies?.pending_subscription_id;
+  const { interact_ref, hash, state } = req.query;
 
-  if (!interact_ref || !continueToken) {
-    return res.status(400).json({ message: "Missing interact_ref or continue token" });
+  if (!interact_ref || !state) {
+    console.error("[grantController] callback missing params:", { interact_ref: !!interact_ref, state: !!state });
+    return res.status(400).json({ message: "Missing interact_ref or state in callback URL" });
   }
 
+  const grantState = gnapAuthService.lookupGrantState(state);
+  if (!grantState) {
+    console.error("[grantController] unknown or expired state:", state);
+    return res.status(400).json({ message: "Grant state not found or expired. Please restart the connect flow." });
+  }
+
+  const { continueToken, continueUri } = grantState;
+
   try {
-    const finalGrant = await gnapAuthService.continueGrant({
+    await gnapAuthService.continueGrant({
       interactRef: interact_ref,
       hash,
       continueToken,
+      continueUri,
     });
 
-    // Activate the pending subscription now that the mandate is confirmed
-    if (pendingSubscriptionId) {
-      const { Subscription, Mandate } = require("../models");
-      const mandate = await Mandate.findOne({ order: [["createdAt", "DESC"]] });
-      if (mandate && pendingSubscriptionId) {
-        await Subscription.update(
-          { isActive: true, mandateId: mandate.id },
-          { where: { id: pendingSubscriptionId } }
-        );
-      }
-      res.clearCookie("pending_subscription_id");
-    }
-
-    res.clearCookie("gnap_continue_token");
-
     const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:3000";
-    return res.redirect(`${frontendUrl}/dashboard?granted=true`);
+    return res.redirect(`${frontendUrl}/Dashboard?granted=true`);
   } catch (err) {
     console.error("[grantController] handleCallback error:", err);
     return res.status(500).json({ message: "Grant continuation failed", error: err.message });

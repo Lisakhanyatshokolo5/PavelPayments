@@ -77,7 +77,15 @@ export default function GymSubscribe({ nfcUid }: GymSubscribeProps) {
   }
 
   return (
-    <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "1.5rem", maxWidth: 480 }}>
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        padding: "1.5rem",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+      }}
+    >
       <h2 style={{ marginTop: 0 }}>Join the Gym</h2>
 
       <div style={{ marginBottom: "1rem" }}>
@@ -168,11 +176,12 @@ export default function GymSubscribe({ nfcUid }: GymSubscribeProps) {
           disabled={isLoading}
           style={{
             padding: "0.6rem 1.2rem",
-            background: isLoading ? "#93c5fd" : "#3b82f6",
+            background: isLoading ? "#93c5fd" : "#2563eb",
             color: "#fff",
             border: "none",
-            borderRadius: 6,
-            fontWeight: 600,
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 15,
             cursor: isLoading ? "not-allowed" : "pointer",
           }}
         >

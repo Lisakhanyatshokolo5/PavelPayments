@@ -1,168 +1,264 @@
 # PavelPayments
 
-A pay-as-you-use billing platform built on the **Interledger Open Payments** protocol.
-Users are charged only for the services they actually consume — no flat subscription fees,
-no cancellation penalties.
+PavelPayments is a usage-based billing demo for hackathons, built on Interledger Open Payments.
+It shows how to connect wallet authorization (GNAP) with real usage events (gym taps or video watching)
+and settle charges automatically.
 
-Supports two services:
-- **Gym** — charged per visit day; amount reduces the longer you stay, adjusts for peak hours.
-  Also supports flat static subscriptions (weekly / monthly / yearly) for users who prefer a fixed fee.
-- **Streaming** — charged per minute of content watched; settled at midnight each day.
+The project supports two services:
 
----
+- Gym: billing by visit time with dynamic pricing, plus optional flat subscriptions.
+- Streaming: billing by watched minutes.
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    WEB CLIENT  (Next.js 14)                      │
-│                                                                   │
-│  Dashboard  GymDashboard  GymHistory  StreamingDashboard         │
-│  GymSubscribe  GymMockTerminal  MockVideoPlayer                  │
-│                                                                   │
-│  Web NFC API (Android Chrome) → tap phone on gym terminal        │
-│  Falls back to on-screen buttons on other browsers               │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ HTTP / REST
-┌──────────────────────────▼──────────────────────────────────────┐
-│                  CORE BACKEND  (Node.js + Express)               │
-│                                                                   │
-│  Gym routes          /api/gym/tap-in, /tap-out, /session,        │
-│                      /subscribe, /pricing, /history              │
-│  Streaming routes    /api/stream/start, /end, /session,          │
-│                      /subscribe, /pricing                        │
-│  Grant routes        /api/grants/initiate, /grants/callback      │
-│  JWKS                /jwks.json                                  │
-│                                                                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
-│  │  billing.js  │  │ gym-session  │  │  streaming-session   │   │
-│  │  (pricing    │  │  (tap-in/out │  │  (play/pause/end)    │   │
-│  │   engine)    │  │   daily sum) │  │                      │   │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘   │
-│                                                                   │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │  settlement.js  ← node-cron @ 00:00 every night          │    │
-│  │  Sums sessions → billing engine → Open Payments payment   │    │
-│  │  Writes DailySettlement record                           │    │
-│  └──────────────────────────────────────────────────────────┘    │
-│                                                                   │
-│  PostgreSQL 16  ·  Redis 7  (via Docker Compose)                 │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ @interledger/open-payments SDK
-┌──────────────────────────▼──────────────────────────────────────┐
-│            INTERLEDGER OPEN PAYMENTS NETWORK                     │
-│  wallet.interledger-test.dev  (testnet — no real money)         │
-│  GNAP grant → user approves → access token stored in Mandate     │
-│  Outgoing payment created per settlement                         │
-└─────────────────────────────────────────────────────────────────┘
-
-                    ┌────────────────────┐
-                    │  EDGE TERMINAL     │
-                    │  (Node.js)         │
-                    │  NFC scan → HTTP   │
-                    │  POST to backend   │
-                    └────────────────────┘
-```
+At midnight, a settlement process calculates daily usage and creates outgoing Open Payments.
 
 ---
 
-## How Gym Billing Works
+## Table of Contents
 
-### Dynamic (pay-as-you-go)
-
-1. User subscribes via `GymSubscribe` → backend initiates GNAP grant → user approves at their wallet.
-2. User taps in (NFC card, phone NFC, or web button) → `POST /api/gym/tap-in` opens a `GymSession`.
-3. User taps out → `POST /api/gym/tap-out` closes session, writes `minutesAccumulated`.
-4. At **midnight** the `settlement.js` cron fires:
-   - Auto-closes any forgotten open sessions.
-   - Sums all closed sessions for the day.
-   - Calls `calculateGymDynamicCharge()`:
-
-```
-charge = base_rate − duration_discount + peak_adjustment
-
-base_rate          per tier:  daily=$6.00  weekly=$5.00  monthly=$4.00  yearly=$3.00
-duration_discount  linear 0→50% off as total minutes grows from 0→120
-peak_adjustment    +$0.50 if >50% minutes are in peak hours; −$0.30 otherwise
-peak hours         06:00–09:00 and 17:00–20:00 local time
-```
-
-   - Fires `outgoingPayment.create()` via Open Payments SDK.
-   - Writes `DailySettlement` (status: charged / skipped / failed).
-   - If user did not visit → status is `skipped`, no charge.
-
-### Static (flat subscription)
-
-Same flow but `calculateGymStaticCharge()` returns a fixed amount regardless of visit duration:
-
-| Tier    | Flat Charge |
-|---------|------------|
-| Daily   | $6.00      |
-| Weekly  | $28.00     |
-| Monthly | $80.00     |
-| Yearly  | $800.00    |
-
-For weekly/monthly/yearly static plans, the GNAP grant includes an `interval` limit so the wallet
-provider enforces the per-period spending cap at the authorization layer.
+1. [What This Project Does](#what-this-project-does)
+2. [System Architecture](#system-architecture)
+3. [End-to-End Flows (Charts)](#end-to-end-flows-charts)
+4. [Business Logic](#business-logic)
+5. [Repository Layout](#repository-layout)
+6. [Local Setup (Detailed)](#local-setup-detailed)
+7. [Runbook for Teammates](#runbook-for-teammates)
+8. [API Reference](#api-reference)
+9. [Troubleshooting](#troubleshooting)
+10. [Developer Notes](#developer-notes)
 
 ---
 
-## How Streaming Billing Works
+## What This Project Does
 
-1. User subscribes via `StreamingDashboard` (same GNAP flow as gym).
-2. User presses Play on `MockVideoPlayer` → `POST /api/stream/start` opens a `StreamSession`.
-3. User pauses/stops → `POST /api/stream/end` closes session, writes `minutesWatched`.
-4. At **midnight** the same settlement cron processes streaming subscriptions:
-   - Sums all `minutesWatched` for the day.
-   - Applies `calculateStreamingCharge()`:
+This is a full-stack monorepo where:
 
+- Users connect a testnet wallet.
+- The backend obtains a payment grant using GNAP.
+- Usage events are recorded (gym sessions or stream sessions).
+- A daily settlement job converts usage into charges.
+- Outgoing payments are sent through Open Payments.
+- Transactions and settlement history are stored for dashboards.
+
+Why this matters for the hackathon:
+
+- Demonstrates pay-as-you-use billing, not a fixed monthly bill.
+- Demonstrates machine-friendly payments over open standards.
+- Demonstrates one backend supporting multiple usage-based products.
+
+---
+
+## System Architecture
+
+### High-level component map
+
+```mermaid
+flowchart LR
+  U[User]
+  W[Web Client<br/>Next.js + React]
+  E[Edge Terminal<br/>NFC Scanner]
+  B[Core Backend<br/>Express + Sequelize]
+  DB[(PostgreSQL)]
+  R[(Redis)]
+  OP[Open Payments Testnet<br/>wallet.interledger-test.dev]
+
+  U --> W
+  U --> E
+  E -->|Tap In / Tap Out| B
+  W -->|REST API| B
+  B --> DB
+  B --> R
+  B -->|GNAP + Outgoing Payment| OP
 ```
-charge = totalMinutes × ratePerMinute
 
-ratePerMinute  daily=$0.05  weekly=$0.04  monthly=$0.03  yearly=$0.02
+### Runtime responsibilities
+
+- Web Client:
+  - Dashboard pages for gym and streaming.
+  - Wallet connect and subscription initiation.
+  - Manual testing flows (simulate taps and playback).
+- Edge Terminal:
+  - NFC entry/exit events pushed to backend.
+  - Useful for physical demo setup.
+- Core Backend:
+  - API endpoints, session tracking, billing calculations, settlement.
+  - GNAP grant initialization and callback finalization.
+  - Open Payments payment creation.
+- PostgreSQL:
+  - Persists users, mandates, subscriptions, sessions, settlements, transactions.
+- Redis:
+  - Supports fast state and cache style needs.
+
+---
+
+## End-to-End Flows (Charts)
+
+### 1. Subscription and wallet authorization flow
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Frontend
+  participant Backend
+  participant Wallet as Open Payments Wallet
+  participant DB as PostgreSQL
+
+  User->>Frontend: Choose service + tier + subscription type
+  Frontend->>Backend: POST /api/gym/subscribe or /api/stream/subscribe
+  Backend->>Wallet: grant.request(interactive)
+  Wallet-->>Backend: interact.redirect URL + continue token
+  Backend-->>Frontend: Return interactRedirectUrl
+  Frontend->>Wallet: Redirect user for approval
+  Wallet->>Backend: GET /api/grants/callback?interact_ref=...
+  Backend->>Wallet: grant.continue()
+  Wallet-->>Backend: access_token
+  Backend->>DB: Upsert Mandate + activate Subscription
+  Backend-->>Frontend: Subscription active
+```
+
+### 2. Gym usage flow (tap in and tap out)
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Device as Web NFC / Edge Terminal
+  participant Backend
+  participant DB as PostgreSQL
+
+  User->>Device: Tap in at gym entrance
+  Device->>Backend: POST /api/gym/tap-in
+  Backend->>DB: Create GymSession with tapInAt
+  Backend-->>Device: Session opened
+
+  User->>Device: Tap out when leaving
+  Device->>Backend: POST /api/gym/tap-out
+  Backend->>DB: Close GymSession with tapOutAt + minutesAccumulated
+  Backend-->>Device: Session closed
+```
+
+### 3. Streaming usage flow (play and stop)
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Frontend
+  participant Backend
+  participant DB as PostgreSQL
+
+  User->>Frontend: Press Play
+  Frontend->>Backend: POST /api/stream/start
+  Backend->>DB: Create StreamSession(startedAt)
+  Backend-->>Frontend: sessionId
+
+  User->>Frontend: Pause/Stop
+  Frontend->>Backend: POST /api/stream/end { sessionId }
+  Backend->>DB: Close StreamSession(endedAt, minutesWatched)
+  Backend-->>Frontend: Updated daily usage estimate
+```
+
+### 4. Midnight settlement flow
+
+```mermaid
+flowchart TD
+  A[node-cron at 00:00] --> B[Load active subscriptions due today]
+  B --> C{Service Type}
+  C -->|Gym| D[Auto-close open gym sessions]
+  C -->|Streaming| E[Sum watched minutes]
+  D --> F[Compute charge via billing.js]
+  E --> F
+  F --> G{Charge required?}
+  G -->|No usage on dynamic plan| H[Write DailySettlement status=skipped]
+  G -->|Yes| I[Create outgoing payment from mandate]
+  I --> J[Write Transaction + DailySettlement status=charged/failed]
 ```
 
 ---
 
-## Database Schema
+## Business Logic
 
-| Table             | Purpose |
-|-------------------|---------|
-| `Users`           | NFC UID → wallet address mapping |
-| `Mandates`        | Open Payments access token per user (stored after GNAP consent) |
-| `Subscriptions`   | A user's chosen plan (serviceType, type, tier, isActive) |
-| `GymSessions`     | Tap-in/tap-out records — one per gym visit segment |
-| `DailySettlements`| One record per user per day — written by midnight cron |
-| `StreamSessions`  | Play/pause records — one per streaming segment |
-| `Transactions`    | Open Payments payment records |
+### Gym dynamic charge model
+
+Used for pay-as-you-go subscriptions.
+
+Formula:
+
+```text
+charge = base_rate - duration_discount + peak_adjustment
+```
+
+Parameters:
+
+- base_rate by tier:
+  - daily = $6.00
+  - weekly = $5.00
+  - monthly = $4.00
+  - yearly = $3.00
+- duration_discount:
+  - linear from 0% to 50% as total minutes go from 0 to 120
+- peak_adjustment:
+  - +$0.50 if more than half of usage is in peak hours
+  - -$0.30 otherwise
+- peak windows:
+  - 06:00-09:00 and 17:00-20:00 local time
+
+If no gym usage is found on a dynamic plan for the day, settlement is marked as skipped and no payment is sent.
+
+### Gym static charge model
+
+Used for flat subscriptions regardless of duration.
+
+| Tier | Flat Charge |
+|------|-------------|
+| Daily | $6.00 |
+| Weekly | $28.00 |
+| Monthly | $80.00 |
+| Yearly | $800.00 |
+
+For weekly/monthly/yearly static plans, GNAP grant limits include an interval cap so wallet-side enforcement matches the subscription period.
+
+### Streaming charge model
+
+Formula:
+
+```text
+charge = totalMinutes * ratePerMinute
+```
+
+Rates:
+
+- daily = $0.05/min
+- weekly = $0.04/min
+- monthly = $0.03/min
+- yearly = $0.02/min
 
 ---
 
-## Stack
+## Repository Layout
 
-| Layer            | Technology |
-|------------------|-----------|
-| Backend          | Node.js 20, Express 4 |
-| ORM              | Sequelize 6 + PostgreSQL 16 |
-| Payments SDK     | `@interledger/open-payments` |
-| Auth protocol    | GNAP + HTTP Signatures (Ed25519) |
-| Cron             | `node-cron` |
-| Frontend         | Next.js 14, React 18, TypeScript |
-| NFC (phone)      | Web NFC API (`navigator.nfc`) + button fallback |
-| Containers       | Docker Compose |
-| Testnet          | wallet.interledger-test.dev |
+```text
+apps/
+  core-backend/     Express API + billing + settlement + GNAP/OpenPayments integration
+  edge-terminal/    Terminal-side NFC event sender
+  web-client/       Next.js dashboards and testing UI
+keys/
+  private.key       Local private key used for signatures (do not commit)
+  public.json       Public JWKS that you upload to wallet testnet
+docker-compose.yml  Local Postgres + Redis infrastructure
+```
 
 ---
 
-## Setup
+## Local Setup (Detailed)
 
 ### 1. Prerequisites
 
-- Docker Desktop running
-- Node.js 20+
-- An account at [wallet.interledger-test.dev](https://wallet.interledger-test.dev/)
+- Docker Desktop running.
+- Node.js 20+.
+- npm installed.
+- Testnet wallet account at https://wallet.interledger-test.dev/.
 
 ### 2. Generate Ed25519 keys
+
+Run from repository root:
 
 ```bash
 node -e "
@@ -172,23 +268,36 @@ const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 fs.writeFileSync('./keys/private.key', privateKey.export({ type:'pkcs8', format:'pem' }));
 const jwk = publicKey.export({ format:'jwk' });
 fs.writeFileSync('./keys/public.json', JSON.stringify({ keys: [{ ...jwk, kid: 'key-1', alg: 'EdDSA' }] }, null, 2));
-console.log('Keys written.');
+console.log('Keys written');
 "
 ```
 
-Upload the public key to your testnet wallet: Settings → Developer Keys → Add Key.
+Upload keys/public.json to the testnet wallet:
 
-### 3. Configure environment
+1. Open wallet settings.
+2. Open Developer Keys.
+3. Add key and copy the generated key id.
+4. Use this value as KEY_ID in .env.
 
-Copy and fill in:
+### 3. Configure environment variables
+
+Create a local env file:
+
+On macOS/Linux:
 
 ```bash
 cp .env.example .env
 ```
 
-Required variables:
+On PowerShell:
 
+```powershell
+Copy-Item .env.example .env
 ```
+
+Required values:
+
+```env
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=pavel_payments
@@ -206,149 +315,234 @@ FRONTEND_URL=http://localhost:3000
 NODE_ENV=development
 ```
 
-### 4. Start infrastructure
+Important:
+
+- BACKEND_PUBLIC_URL must match your backend callback origin.
+- KEY_ID must match the key uploaded to wallet testnet.
+- Keep keys/private.key local only.
+
+### 4. Start infrastructure (Postgres and Redis)
 
 ```bash
 docker-compose up -d
 ```
 
-### 5. Install and run
+Check containers:
+
+```bash
+docker-compose ps
+```
+
+### 5. Install dependencies and start app
 
 ```bash
 npm install
-npm run dev          # starts backend (:4001) + web client (:3000) concurrently
+npm run dev
 ```
 
-### 6. Verify
+Expected local ports:
+
+- Frontend: http://localhost:3000
+- Backend: http://localhost:4001
+
+### 6. Verify everything is healthy
 
 ```bash
-curl http://localhost:4001/health   # {"status":"ok"}
+curl http://localhost:4001/health
 curl http://localhost:4001/api/gym/pricing
+curl http://localhost:4001/api/stream/pricing
 ```
 
 ---
 
-## API Reference
+## Runbook for Teammates
 
-### Gym
+### Demo scenario A: Gym dynamic billing
 
-| Method | Path | Body / Params | Description |
-|--------|------|---------------|-------------|
-| POST | `/api/gym/tap-in` | `{ uid, terminalId? }` | Record gym entry |
-| POST | `/api/gym/tap-out` | `{ uid, terminalId? }` | Record gym exit |
-| GET | `/api/gym/session/:uid` | — | Live session status + estimated charge |
-| POST | `/api/gym/subscribe` | `{ walletAddress, nfcUid, subscriptionType, tier }` | Initiate GNAP grant + create subscription |
-| GET | `/api/gym/subscriptions/:uid` | — | Active subscriptions |
-| GET | `/api/gym/pricing` | — | Rate constants for frontend |
-| GET | `/api/gym/history/:uid` | — | DailySettlement records (last 90 days) |
-
-### Streaming
-
-| Method | Path | Body / Params | Description |
-|--------|------|---------------|-------------|
-| POST | `/api/stream/start` | `{ uid, contentId, contentTitle?, contentType? }` | Start stream session |
-| POST | `/api/stream/end` | `{ sessionId }` | End stream session |
-| GET | `/api/stream/session/:uid` | — | Current session + today's minutes + estimated charge |
-| POST | `/api/stream/subscribe` | `{ walletAddress, nfcUid, subscriptionType, tier }` | Subscribe |
-| GET | `/api/stream/subscriptions/:uid` | — | Active subscriptions |
-| GET | `/api/stream/pricing` | — | Rate constants |
-
-### Grants & Payments
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/grants/initiate` | Start GNAP grant (wallet connect) |
-| GET | `/api/grants/callback` | GNAP redirect handler (wallet → backend) |
-| POST | `/api/trigger-payment` | Legacy NFC one-shot payment trigger |
-| GET | `/api/transactions` | Transaction history by wallet address |
-| GET | `/jwks.json` | Public key set for HTTP Signature verification |
-
-### Dev only
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/dev/settle-now` | Trigger settlement immediately (skips midnight wait) |
-
----
-
-## Manual Settlement Test
-
-Without waiting for midnight:
+1. Open frontend at http://localhost:3000.
+2. Connect wallet and subscribe to a gym dynamic plan.
+3. Simulate tap in and tap out from Gym dashboard or edge terminal.
+4. Verify session endpoint:
+   - GET /api/gym/session/:uid
+5. Trigger settlement manually:
 
 ```bash
 curl -X POST http://localhost:4001/api/dev/settle-now
 ```
 
+6. Check history endpoint:
+   - GET /api/gym/history/:uid
+
+### Demo scenario B: Streaming billing
+
+1. Subscribe in Streaming dashboard.
+2. Start stream (POST /api/stream/start is called).
+3. Stop stream (POST /api/stream/end).
+4. Check current session summary:
+   - GET /api/stream/session/:uid
+5. Trigger settlement and review resulting transaction records.
+
+### Daily developer routine
+
+1. Pull latest branch.
+2. Ensure Docker is up: docker-compose up -d.
+3. Run npm install after dependency changes.
+4. Start local app: npm run dev.
+5. Run quick API health checks.
+6. Validate one gym flow and one streaming flow before merging.
+
+### How to reset local state for clean demos
+
+If you need a fresh DB state for demo runs:
+
+```bash
+docker-compose down -v
+docker-compose up -d
+```
+
+Then re-run app and resubscribe test users.
+
 ---
 
-## Key Files — AI Agent Context
+## API Reference
 
-> Paste this section into your AI assistant when extending this codebase.
+### Gym APIs
 
-**Project:** PavelPayments — Node.js monorepo. Backend: Express + Sequelize + PostgreSQL.
-Frontend: Next.js 14 + React 18 + TypeScript. Payments: `@interledger/open-payments` SDK.
+| Method | Path | Body / Params | Description |
+|--------|------|---------------|-------------|
+| POST | /api/gym/tap-in | { uid, terminalId? } | Record gym entry |
+| POST | /api/gym/tap-out | { uid, terminalId? } | Record gym exit |
+| GET | /api/gym/session/:uid | - | Live session status and estimated charge |
+| POST | /api/gym/subscribe | { walletAddress, nfcUid, subscriptionType, tier } | Start GNAP flow and create subscription |
+| GET | /api/gym/subscriptions/:uid | - | Active subscriptions |
+| GET | /api/gym/pricing | - | Gym pricing constants |
+| GET | /api/gym/history/:uid | - | Recent daily settlements |
 
-**Open Payments SDK patterns (from working code):**
+### Streaming APIs
+
+| Method | Path | Body / Params | Description |
+|--------|------|---------------|-------------|
+| POST | /api/stream/start | { uid, contentId, contentTitle?, contentType? } | Start stream session |
+| POST | /api/stream/end | { sessionId } | End stream session |
+| GET | /api/stream/session/:uid | - | Current session + daily usage |
+| POST | /api/stream/subscribe | { walletAddress, nfcUid, subscriptionType, tier } | Subscribe for streaming |
+| GET | /api/stream/subscriptions/:uid | - | Active subscriptions |
+| GET | /api/stream/pricing | - | Streaming pricing constants |
+
+### Grants and Payments APIs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /api/grants/initiate | Start wallet authorization flow |
+| GET | /api/grants/callback | Complete interactive GNAP callback |
+| POST | /api/trigger-payment | Legacy one-shot payment endpoint |
+| GET | /api/transactions | Payment history by wallet address |
+| GET | /jwks.json | Public JWKS for signature verification |
+
+### Development-only API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /api/dev/settle-now | Trigger settlement instantly (skip midnight wait) |
+
+---
+
+## Troubleshooting
+
+### Backend fails to start
+
+- Confirm .env exists and has correct DB and wallet values.
+- Confirm keys/private.key and keys/public.json exist.
+- Check if port 4001 is already in use.
+
+### Wallet approval succeeds but subscription remains inactive
+
+- Verify BACKEND_PUBLIC_URL is reachable and matches callback URL.
+- Verify KEY_ID matches the uploaded developer key.
+- Check grant callback logs for interact_ref handling errors.
+
+### Settlement writes skipped unexpectedly
+
+- For dynamic plans, skipped means usage for that day was zero.
+- Verify sessions are correctly closed (tap-out or stream-end happened).
+- Confirm the test user actually has an active mandate/subscription.
+
+### Docker issues
+
+- Run docker-compose ps and inspect unhealthy/exited containers.
+- If state is corrupted, reset:
+
+```bash
+docker-compose down -v
+docker-compose up -d
+```
+
+---
+
+## Developer Notes
+
+### Important backend files
+
+- apps/core-backend/src/services/billing.js
+  - All pricing formulas and charge calculations.
+- apps/core-backend/src/services/gym-session.js
+  - Gym session open/close logic.
+- apps/core-backend/src/services/streaming-session.js
+  - Streaming session open/close logic.
+- apps/core-backend/src/services/settlement.js
+  - Daily settlement scheduler and payment orchestration.
+- apps/core-backend/src/controllers/grantController.js
+  - GNAP callback finalization.
+
+### Open Payments SDK usage pattern
+
 ```js
 const client = await createAuthenticatedClient({
-  walletAddressUrl, keyId,
-  privateKey: keyConfig.privateKeyBuffer  // Buffer from fs.readFileSync
+  walletAddressUrl,
+  keyId,
+  privateKey: keyConfig.privateKeyBuffer,
 });
 
 const wallet = await client.walletAddress.get({ url: walletAddressUrl });
-// wallet.authServer      → use for grant.request()
-// wallet.resourceServer  → use for outgoingPayment.create()
-// wallet.id              → use as walletAddress in create() bodies
 
-// Non-interactive grant:
-const grant = await client.grant.request({ url: wallet.authServer }, { access_token: { access: [...] } });
-
-// Interactive grant with interval (static recurring):
-const pending = await client.grant.request({ url: wallet.authServer }, {
-  access_token: { access: [{ type: "outgoing-payment", actions: [...], limits: {
-    debitAmount: { value: "8000", assetCode: "USD", assetScale: 2 },
-    interval: "R/2026-06-25T00:00:00Z/P1M"
-  }}] },
-  interact: { start: ["redirect"], finish: { method: "redirect", uri: callbackUrl, nonce } }
+const pendingGrant = await client.grant.request({ url: wallet.authServer }, {
+  access_token: { access: [/* outgoing-payment access */] },
+  interact: {
+    start: ['redirect'],
+    finish: { method: 'redirect', uri: callbackUrl, nonce },
+  },
 });
 
-// After callback:
-const final = await client.grant.continue(
-  { url: pending.continue.uri, accessToken: pending.continue.access_token.value },
-  { interact_ref }
+const finalGrant = await client.grant.continue(
+  {
+    url: pendingGrant.continue.uri,
+    accessToken: pendingGrant.continue.access_token.value,
+  },
+  { interact_ref },
 );
 
-// Create payment:
 await client.outgoingPayment.create(
-  { url: wallet.resourceServer, accessToken: final.access_token.value },
-  { walletAddress: wallet.id, incomingAmount: { value: "600", assetCode: "USD", assetScale: 2 } }
+  { url: wallet.resourceServer, accessToken: finalGrant.access_token.value },
+  {
+    walletAddress: wallet.id,
+    incomingAmount: { value: '600', assetCode: 'USD', assetScale: 2 },
+  },
 );
 ```
 
-**DB schema summary:** `Users` (id, nfcUid, walletAddress, preferredCurrency, isPremium),
-`Mandates` (id, userId, accessToken, manageUrl, expiresAt, isActive),
-`Subscriptions` (id, userId, mandateId, serviceType, subscriptionType, tier, baseRateCents, nextBillingDate, isActive),
-`GymSessions` (id, userId, terminalId, tapInAt, tapOutAt, minutesAccumulated, date),
-`DailySettlements` (id, userId, serviceType, settlementDate, totalMinutes, chargeAmountCents, currency, transactionId, status, breakdown),
-`StreamSessions` (id, userId, contentId, contentTitle, contentType, startedAt, endedAt, minutesWatched, date),
-`Transactions` (id, userId, walletAddress, paymentId, amount, currency, description, status).
+### Settlement summary
 
-**Key files to modify:**
-- Add pricing rules → `apps/core-backend/src/services/billing.js`
-- Add session logic → `apps/core-backend/src/services/gym-session.js` or `streaming-session.js`
-- Add settlement logic → `apps/core-backend/src/services/settlement.js`
-- Add a route → create controller in `apps/core-backend/src/controllers/`, wire in `apps/core-backend/src/index.js`
-- Add a frontend page → `apps/web-client/src/pages/`, component → `apps/web-client/src/components/`
+`runDailySettlement()` executes at 00:00 via node-cron and performs:
 
-**How settlement works:**
-`settlement.runDailySettlement()` runs at 00:00 via node-cron. It queries all `Subscriptions` where
-`isActive=true` and `nextBillingDate <= today`. For each: auto-closes open sessions, sums daily
-minutes, calls the billing engine, fires `createOutgoingPaymentFromMandate()`, writes `DailySettlement`.
-Dynamic subscriptions with 0 minutes get status `skipped` (no charge). Static subscriptions always charge.
-To test without waiting for midnight: `POST /api/dev/settle-now` (development only).
+1. Load active subscriptions due for billing.
+2. Close any open sessions for the day.
+3. Aggregate usage minutes.
+4. Compute charge via billing engine.
+5. Create outgoing payment when charge applies.
+6. Persist DailySettlement and Transaction records.
 
-**GNAP callback flow:**
-`POST /api/gym/subscribe` → creates pending Subscription (isActive:false) + sets cookies
-(`gnap_continue_token`, `pending_subscription_id`) → returns `interactRedirectUrl`.
-User approves at wallet → wallet redirects to `GET /api/grants/callback` → backend calls
-`grant.continue()` → `Mandate.upsert()` → `Subscription.update({ isActive: true, mandateId })`.
+For faster testing, call:
+
+```bash
+curl -X POST http://localhost:4001/api/dev/settle-now
+```

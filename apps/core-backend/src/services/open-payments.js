@@ -16,9 +16,19 @@ let _client = null;
 async function getClient() {
   if (_client) return _client;
 
+  if (!process.env.WALLET_ADDRESS) {
+    throw new Error("Missing WALLET_ADDRESS in .env");
+  }
+  if (!process.env.KEY_ID) {
+    throw new Error("Missing KEY_ID in .env");
+  }
+  if (!keyConfig.privateKeyPath) {
+    throw new Error("Missing keys/private.key file");
+  }
+
   _client = await createAuthenticatedClient({
     walletAddressUrl: process.env.WALLET_ADDRESS,
-    privateKey: keyConfig.privateKeyBuffer,
+    privateKey: keyConfig.privateKeyPath,
     keyId: process.env.KEY_ID,
   });
 

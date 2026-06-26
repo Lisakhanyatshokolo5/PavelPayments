@@ -128,11 +128,11 @@ export default function GymMockTerminal({ nfcUid, onSessionChange }: GymMockTerm
   return (
     <div
       style={{
-        border: "2px solid",
-        borderColor: status === "inside" ? "#16a34a" : status === "error" ? "#dc2626" : "#e5e7eb",
+        background: "#fff",
+        border: `2px solid ${status === "inside" ? "#86efac" : status === "error" ? "#fca5a5" : "#e2e8f0"}`,
         borderRadius: 12,
-        padding: "1.5rem",
-        maxWidth: 360,
+        padding: "1.75rem 1.5rem",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
         textAlign: "center",
         transition: "border-color 0.2s",
       }}
@@ -141,16 +141,27 @@ export default function GymMockTerminal({ nfcUid, onSessionChange }: GymMockTerm
         {status === "inside" ? "🏋️" : "🚪"}
       </div>
 
-      <h3 style={{ margin: "0 0 0.25rem" }}>Gym Terminal</h3>
+      <h3 style={{ margin: "0 0 0.375rem", fontSize: 16, fontWeight: 700 }}>Gym Terminal</h3>
 
-      <p style={{ color: statusColor[status], fontWeight: 600, margin: "0 0 1rem" }}>
+      <div
+        style={{
+          display: "inline-block",
+          padding: "3px 12px",
+          borderRadius: 20,
+          fontSize: 13,
+          fontWeight: 600,
+          marginBottom: "1rem",
+          background: status === "inside" ? "#f0fdf4" : status === "error" ? "#fef2f2" : "#f8fafc",
+          color: statusColor[status],
+        }}
+      >
         {status === "idle" && "Not checked in"}
         {status === "inside" && `Inside — ${formatTime(elapsedSeconds)}`}
         {status === "error" && "Error"}
-      </p>
+      </div>
 
       {message && (
-        <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 1rem" }}>{message}</p>
+        <p style={{ fontSize: 13, color: "#64748b", margin: "0 0 1.25rem" }}>{message}</p>
       )}
 
       <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center" }}>
@@ -158,14 +169,15 @@ export default function GymMockTerminal({ nfcUid, onSessionChange }: GymMockTerm
           onClick={() => doTapIn(nfcUid)}
           disabled={status === "inside"}
           style={{
-            padding: "0.6rem 1.2rem",
-            background: status === "inside" ? "#d1fae5" : "#16a34a",
-            color: status === "inside" ? "#6b7280" : "#fff",
+            padding: "0.6rem 1.4rem",
+            background: status === "inside" ? "#dcfce7" : "#16a34a",
+            color: status === "inside" ? "#86efac" : "#fff",
             border: "none",
             borderRadius: 8,
-            fontWeight: 600,
+            fontWeight: 700,
             cursor: status === "inside" ? "not-allowed" : "pointer",
             fontSize: 14,
+            transition: "background 0.15s",
           }}
         >
           Tap In
@@ -175,9 +187,9 @@ export default function GymMockTerminal({ nfcUid, onSessionChange }: GymMockTerm
           onClick={() => doTapOut(nfcUid)}
           disabled={status !== "inside"}
           style={{
-            padding: "0.6rem 1.2rem",
-            background: status !== "inside" ? "#f3f4f6" : "#dc2626",
-            color: status !== "inside" ? "#9ca3af" : "#fff",
+            padding: "0.6rem 1.4rem",
+            background: status !== "inside" ? "#f1f5f9" : "#dc2626",
+            color: status !== "inside" ? "#cbd5e1" : "#fff",
             border: "none",
             borderRadius: 8,
             fontWeight: 600,

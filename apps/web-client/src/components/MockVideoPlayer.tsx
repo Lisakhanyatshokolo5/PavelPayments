@@ -108,16 +108,24 @@ export default function MockVideoPlayer({ nfcUid, onSessionChange }: MockVideoPl
   }
 
   return (
-    <div style={{ maxWidth: 640 }}>
-      <h2 style={{ marginTop: 0 }}>Mock Streaming Service</h2>
+    <div
+      style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        padding: "1.5rem",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+      }}
+    >
+      <h2 style={{ margin: "0 0 1.25rem", fontSize: 18, fontWeight: 800 }}>Mock Streaming Service</h2>
 
       {/* Now playing */}
       {selected && isPlaying && (
         <div
           style={{
-            border: "2px solid #7c3aed",
+            border: "2px solid #a78bfa",
             borderRadius: 12,
-            padding: "1.5rem",
+            padding: "1.25rem 1.5rem",
             marginBottom: "1.5rem",
             background: "#faf5ff",
             display: "flex",
@@ -125,33 +133,34 @@ export default function MockVideoPlayer({ nfcUid, onSessionChange }: MockVideoPl
             gap: "1.5rem",
           }}
         >
-          <div style={{ fontSize: 56 }}>{selected.poster}</div>
+          <div style={{ fontSize: 52 }}>{selected.poster}</div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 18 }}>{selected.title}</div>
-            <div style={{ color: "#7c3aed", fontWeight: 600, fontSize: 20, margin: "0.25rem 0" }}>
+            <div style={{ fontWeight: 700, fontSize: 17 }}>{selected.title}</div>
+            <div style={{ color: "#7c3aed", fontWeight: 800, fontSize: 22, margin: "0.2rem 0" }}>
               {formatTime(elapsedSeconds)}
             </div>
-            <div style={{ fontSize: 13, color: "#6b7280" }}>Billing clock running…</div>
+            <div style={{ fontSize: 12, color: "#94a3b8" }}>Billing clock running · per-minute rate</div>
           </div>
           <button
             onClick={handleStop}
             style={{
-              padding: "0.6rem 1.2rem",
+              padding: "0.6rem 1.25rem",
               background: "#7c3aed",
               color: "#fff",
               border: "none",
               borderRadius: 8,
-              fontWeight: 600,
+              fontWeight: 700,
               cursor: "pointer",
+              fontSize: 14,
             }}
           >
-            Stop
+            ⏹ Stop
           </button>
         </div>
       )}
 
       {message && !isPlaying && (
-        <p style={{ color: "#6b7280", fontSize: 14, marginBottom: "1rem" }}>{message}</p>
+        <p style={{ color: "#64748b", fontSize: 14, marginBottom: "1.25rem", marginTop: 0 }}>{message}</p>
       )}
 
       {/* Content catalog */}
@@ -162,21 +171,22 @@ export default function MockVideoPlayer({ nfcUid, onSessionChange }: MockVideoPl
             <div
               key={content.id}
               style={{
-                border: isActive ? "2px solid #7c3aed" : "1px solid #e5e7eb",
-                borderRadius: 8,
-                padding: "0.75rem",
+                border: isActive ? "2px solid #7c3aed" : "1px solid #e2e8f0",
+                borderRadius: 10,
+                padding: "0.875rem 1rem",
                 display: "flex",
                 alignItems: "center",
-                gap: "0.75rem",
-                background: isActive ? "#faf5ff" : "#fff",
+                gap: "0.875rem",
+                background: isActive ? "#faf5ff" : "#f8fafc",
+                transition: "border-color 0.15s",
               }}
             >
-              <div style={{ fontSize: 32 }}>{content.poster}</div>
+              <div style={{ fontSize: 30 }}>{content.poster}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {content.title}
                 </div>
-                <div style={{ fontSize: 12, color: "#9ca3af" }}>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
                   {content.type} · {content.duration}
                 </div>
               </div>
@@ -184,14 +194,14 @@ export default function MockVideoPlayer({ nfcUid, onSessionChange }: MockVideoPl
                 onClick={() => (isActive ? handleStop() : handlePlay(content))}
                 disabled={isPlaying && !isActive}
                 style={{
-                  padding: "0.35rem 0.75rem",
-                  background: isActive ? "#7c3aed" : isPlaying ? "#f3f4f6" : "#7c3aed",
-                  color: isActive || (!isPlaying) ? "#fff" : "#9ca3af",
+                  padding: "0.35rem 0.8rem",
+                  background: isActive ? "#7c3aed" : isPlaying ? "#e2e8f0" : "#7c3aed",
+                  color: isActive || !isPlaying ? "#fff" : "#94a3b8",
                   border: "none",
                   borderRadius: 6,
-                  fontWeight: 600,
+                  fontWeight: 700,
                   cursor: isPlaying && !isActive ? "not-allowed" : "pointer",
-                  fontSize: 13,
+                  fontSize: 12,
                   flexShrink: 0,
                 }}
               >
